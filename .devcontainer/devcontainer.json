@@ -21,5 +21,8 @@
 		// ssh
 		"source=/home/henry/.ssh/,target=/root/.ssh,type=bind"
 	],
+	"runArgs": [
+		"--network=host"
+	],
 	"remoteUser": "root"
 }
