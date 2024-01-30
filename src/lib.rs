@@ -18,9 +18,10 @@ impl<'a> Migrations<'a> {
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
-        if (create_migration_table_and_schema_if_not_exists(self.client).await?) {
-            //run_new_migrations(self.client).await?;
+        if create_migration_table_and_schema_if_not_exists(self.client).await? {
+            return Ok(()); // No migrations to run
         }
+        run_any_new_migrations(self.client).await?;
         Ok(())
     }
 }
@@ -35,6 +36,10 @@ enum MigrationsError {
     FileNameMalformed(String),
     #[error("Cannot load file '{0}'")]
     CannotLoadFile(String),
+    #[error("{0}")]
+    MigrationTableOrFileCorruption(String),
+    #[error("{0}")]
+    MigrationFileNumbering(String),
     #[error("Error running migration '{0}'")]
     WrappedError(#[from] Box<dyn Error + Send + Sync>),
 }
@@ -42,14 +47,14 @@ enum MigrationsError {
 #[derive(Debug, Deserialize, Serialize)]
 struct Migration {
     file_name: String,
-    number: i32,
+    number: u32,
     date_ran: Option<DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug)]
 struct SqlFile {
     file_name: String,
-    number: i32,
+    number: u32,
     sql: String,
 }
 
@@ -147,20 +152,102 @@ struct MigrationFiles;
 #[folder = "schema"]
 struct SchemaFiles;
 
-async fn get_migrations_in_db(client: &Surreal<Client>) -> anyhow::Result<Vec<Migration>> {
+async fn run_any_new_migrations(client: &Surreal<Client>) -> anyhow::Result<()> {
     let sql = r#"
 SELECT * FROM migrations;
     "#;
 
-    let migrations: Vec<Migration> = client.query(sql).await?.take(0)?;
+    let db_migrations: Vec<Migration> = client.query(sql).await?.take(0)?;
 
-    Ok(migrations)
+    let mut file_migrations = get_sql_files::<MigrationFiles>().await?;
+
+    if let Some(first) = file_migrations.first() {
+        if first.number != 1 {
+            bail!(MigrationsError::MigrationFileNumbering(format!(
+                "First migration file number is not 1. File name: '{}'",
+                first.file_name
+            )));
+        }
+    }
+
+    for file_migration in file_migrations.iter().zip(file_migrations.iter().skip(1)) {
+        if file_migration.0.number + 1 == file_migration.1.number {
+            bail!(MigrationsError::MigrationFileNumbering(format!(
+                "Migration file numbers are not sequential. File names: '{}' and '{}'",
+                file_migration.0.file_name, file_migration.1.file_name
+            )));
+        }
+    }
+
+    for db_migration in db_migrations.iter() {
+        let (index, migration_file) = file_migrations
+            .iter()
+            .enumerate()
+            .find(|(_index, migration_file)| migration_file.number == db_migration.number)
+            .ok_or_else(|| {
+                MigrationsError::MigrationTableOrFileCorruption(format!(
+                    "Migration file not found for migration number '{}'. Original file name in db: '{}'",
+                    db_migration.number,
+                    db_migration.file_name
+                ))
+            })?;
+        if db_migration.file_name != migration_file.file_name {
+            bail!(MigrationsError::MigrationTableOrFileCorruption(format!(
+                "Migration file name  '{}' does not match the file name in the database '{}'",
+                migration_file.file_name, db_migration.file_name
+            )));
+        }
+        file_migrations.remove(index);
+    }
+
+    if file_migrations.is_empty() {
+        return Ok(()); // No migrations to run
+    }
+
+    let run_new_migrations = file_migrations
+        .iter()
+        .map(|migration| migration.sql.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let update_migration_table = file_migrations
+        .into_iter()
+        .map(|migration| Migration {
+            file_name: migration.file_name,
+            number: migration.number,
+            date_ran: Some(Utc::now()),
+        })
+        .map(|migration| {
+            Ok(format!(
+                "INSERT INTO migrations {};",
+                serde_json::to_string(&migration)?
+            ))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .join("\n");
+
+    let sql = format!(
+        r#"
+BEGIN TRANSACTION;
+
+{}
+
+{}
+
+COMMIT TRANSACTION;
+"#,
+        run_new_migrations, update_migration_table
+    );
+
+    let _ = client.query(sql).await?.check()?;
+
+    Ok(())
 }
 
 async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile>> {
     let number_re = Regex::new(r"^\d+").unwrap();
 
-    let number_and_file_name: Vec<(i32, Cow<str>)> = F::iter()
+    let number_and_file_name: Vec<(u32, Cow<str>)> = F::iter()
         .map(|file_name| {
             let migration_file_name = file_name.to_string();
             let migration_number = (|| {
@@ -168,7 +255,7 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile
                     .captures(&file_name)?
                     .get(0)?
                     .as_str()
-                    .parse::<i32>()
+                    .parse::<u32>()
                     .ok()
             })()
             .ok_or_else(|| MigrationsError::FileNameMalformed(migration_file_name.clone()))?;
