@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use surrealdb::{engine::remote::ws::Client, Surreal};
 
-pub struct SurrealdbMigrations;
+pub struct SurrealdbMigrationEngine;
 
-impl SurrealdbMigrations {
+impl SurrealdbMigrationEngine {
 
     pub async fn run(client: &Surreal<Client>) -> anyhow::Result<()> {
         if create_migration_table_and_schema_if_not_exists(&client).await? {

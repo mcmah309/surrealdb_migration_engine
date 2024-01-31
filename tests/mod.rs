@@ -1,5 +1,5 @@
 use surrealdb::{engine::remote::ws::{Client, Ws}, opt::auth::Root, Surreal};
-use surrealdb_migrations::SurrealdbMigrations;
+use surrealdb_migration_engine::SurrealdbMigrationEngine;
 
 
 /// Start the server with the following command:
@@ -21,5 +21,5 @@ async fn create_migration_table_if_not_exists() {
     .await.unwrap();
     client.use_ns("system").use_db("system").await.unwrap();
 
-    SurrealdbMigrations::run(&client).await.unwrap();
+    SurrealdbMigrationEngine::run(&client).await.unwrap();
 }
