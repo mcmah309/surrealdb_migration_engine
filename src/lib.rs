@@ -1,9 +1,7 @@
 use std::borrow::Cow;
 
-use anyhow::bail;
 use chrono::Utc;
 use regex::Regex;
-use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use surrealdb::{engine::remote::ws::Client, Surreal};
@@ -11,23 +9,32 @@ use surrealdb::{engine::remote::ws::Client, Surreal};
 pub struct SurrealdbMigrationEngine;
 
 impl SurrealdbMigrationEngine {
-
-    pub async fn run(client: &Surreal<Client>) -> anyhow::Result<()> {
-        if create_migration_table_and_schema_if_not_exists(&client).await? {
+    pub async fn run<MigrationFiles, SchemaFiles>(
+        client: &Surreal<Client>,
+    ) -> Result<(), MigrationsError>
+    where
+        MigrationFiles: rust_embed::RustEmbed,
+        SchemaFiles: rust_embed::RustEmbed,
+    {
+        if create_migration_table_and_schema_if_not_exists::<MigrationFiles, SchemaFiles>(&client)
+            .await?
+        {
             return Ok(()); // No migrations to run
         }
-        run_any_new_migrations(&client).await?;
+        run_any_new_migrations::<MigrationFiles, SchemaFiles>(&client).await?;
         Ok(())
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-enum MigrationsError {
+pub enum MigrationsError {
     #[error("key '{0}' is not an object in query result '{1}'")]
     QueryResultNotAnObject(String, String),
     #[error("key '{0}' not found in query result '{1}'")]
     QueryResultKeyNotFound(String, String),
+    #[error("query result is empty for query '{0}")]
+    QueryResultEmpty(String),
     #[error("File name '{0}' is malformed. Expected format e.g.: '0001_name.sursql'")]
     FileNameMalformed(String),
     #[error("Cannot load file '{0}'")]
@@ -36,8 +43,10 @@ enum MigrationsError {
     MigrationTableOrFileCorruption(String),
     #[error("{0}")]
     FileNumbering(String),
-    //#[error("Original query error: '{0}'\n Additional info: '{1}'")]
-    //QueryError(Box<dyn Error + Send + Sync>, String),
+    #[error("Surrealdb error: '{0}'\n Additional info: '{1}'")]
+    Surrealdb(surrealdb::Error, String),
+    // #[error("Original query error: '{0}'\n Additional info: '{1}'")]
+    // WrappedError(Box<dyn Error + Send + Sync>, String),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -57,20 +66,28 @@ struct SqlFile {
 
 /// Creates the migration table and schema if it does not exist.
 /// Returns true if the table was created, false if it already existed.
-async fn create_migration_table_and_schema_if_not_exists(
+async fn create_migration_table_and_schema_if_not_exists<MigrationFiles, SchemaFiles>(
     client: &Surreal<Client>,
-) -> anyhow::Result<bool> {
+) -> Result<bool, MigrationsError>
+where
+    MigrationFiles: rust_embed::RustEmbed,
+    SchemaFiles: rust_embed::RustEmbed,
+{
     let get_migration_db = r#"
 INFO FOR DB;
     "#;
 
-    let result: Vec<Value> = client.query(get_migration_db).await?.take(0)?;
+    let result: Vec<Value> = client
+        .query(get_migration_db)
+        .await
+        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", get_migration_db)))?
+        .take(0)
+        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", get_migration_db)))?;
 
     let Some(db_info) = result.get(0) else {
-        bail!(
-            "Unexpected result when getting info for the migrations database. Response was: {:?}",
-            result
-        );
+        return Err(MigrationsError::QueryResultEmpty(
+            get_migration_db.to_string(),
+        ));
     };
 
     let tables = db_info
@@ -131,27 +148,31 @@ INFO FOR DB;
 
     query
         .query("COMMIT TRANSACTION;")
-        .await?
-        //.map_err(|e| MigrationsError::QueryError(Box::new(e), format!("Full query:\n{}", &sql)))?
-        .check()?;
+        .await
+        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?
+        .check()
+        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?;
 
     Ok(true)
 }
 
-#[derive(RustEmbed)]
-#[folder = "$CARGO_MANIFEST_DIR/migrations"]
-struct MigrationFiles;
-
-#[derive(RustEmbed)]
-#[folder = "$CARGO_MANIFEST_DIR/schema"]
-struct SchemaFiles;
-
-async fn run_any_new_migrations(client: &Surreal<Client>) -> anyhow::Result<()> {
+async fn run_any_new_migrations<MigrationFiles, SchemaFiles>(
+    client: &Surreal<Client>,
+) -> Result<(), MigrationsError>
+where
+    MigrationFiles: rust_embed::RustEmbed,
+    SchemaFiles: rust_embed::RustEmbed,
+{
     let sql = r#"
 SELECT * FROM migrations;
     "#;
 
-    let db_migrations: Vec<Migration> = client.query(sql).await?.take(0)?;
+    let db_migrations: Vec<Migration> = client
+        .query(sql)
+        .await
+        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", sql)))?
+        .take(0)
+        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", sql)))?;
 
     let mut file_migrations = get_sql_files::<MigrationFiles>().await?;
 
@@ -168,7 +189,7 @@ SELECT * FROM migrations;
                 ))
             })?;
         if db_migration.file_name != migration_file.file_name {
-            bail!(MigrationsError::MigrationTableOrFileCorruption(format!(
+            return Err(MigrationsError::MigrationTableOrFileCorruption(format!(
                 "Migration file name  '{}' does not match the file name in the database '{}'",
                 migration_file.file_name, db_migration.file_name
             )));
@@ -193,7 +214,7 @@ SELECT * FROM migrations;
     });
 
     let mut query = client
-        //.query("BEGIN TRANSACTION;")
+        .query("BEGIN TRANSACTION;")
         .query(&run_new_migrations);
 
     for (index, migration) in new_migration_table_entries.enumerate() {
@@ -203,15 +224,16 @@ SELECT * FROM migrations;
     }
 
     query
-        //.query("COMMIT TRANSACTION;")
-        .await?
-        //.map_err(|e| MigrationsError::QueryError(Box::new(e), format!("Full query:\n{}", &sql)))?
-        .check()?;
+        .query("COMMIT TRANSACTION;")
+        .await
+        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?
+        .check()
+        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?;
 
     Ok(())
 }
 
-async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile>> {
+async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, MigrationsError> {
     let number_re = Regex::new(r"^\d+").unwrap();
 
     let mut number_and_file_name: Vec<(u32, Cow<str>)> = F::iter()
@@ -235,7 +257,7 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile
     // validate
     if let Some((number, name)) = number_and_file_name.first() {
         if number.to_owned() != 1 {
-            bail!(MigrationsError::FileNumbering(format!(
+            return Err(MigrationsError::FileNumbering(format!(
                 "First file number is not 1. File name: '{}'",
                 name
             )));
@@ -246,7 +268,7 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile
         .zip(number_and_file_name.iter().skip(1))
     {
         if a.0 + 1 != b.0 {
-            bail!(MigrationsError::FileNumbering(format!(
+            return Err(MigrationsError::FileNumbering(format!(
                 "File numbers are not sequential or not one apart. File names: '{}' and '{}'",
                 a.1, b.1
             )));
