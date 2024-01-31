@@ -2,6 +2,14 @@ use surrealdb::{engine::remote::ws::{Client, Ws}, opt::auth::Root, Surreal};
 use surrealdb_migration_engine::SurrealdbMigrationEngine;
 
 
+#[derive(rust_embed::RustEmbed)]
+#[folder = "migrations"]
+struct MigrationFiles;
+
+#[derive(rust_embed::RustEmbed)]
+#[folder = "schema"]
+struct SchemaFiles;
+
 /// Start the server with the following command:
 /// ```bash
 /// podman run -u root --rm -p 8000:8000 -v ./surrealdb/data:/surrealdb/data surrealdb/surrealdb:v1.1.1 start --auth --user root --pass root file:/surrealdb/data/mydatabase.db
@@ -21,5 +29,5 @@ async fn create_migration_table_if_not_exists() {
     .await.unwrap();
     client.use_ns("system").use_db("system").await.unwrap();
 
-    SurrealdbMigrationEngine::run(&client).await.unwrap();
-}
+    SurrealdbMigrationEngine::run::<MigrationFiles,SchemaFiles>(&client).await.unwrap();
+}  
