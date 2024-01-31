@@ -1,11 +1,11 @@
-use std::{borrow::Cow, error::Error};
+use std::borrow::Cow;
 
 use anyhow::bail;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use regex::Regex;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
-use serde_json::{map::Values, Value};
+use serde_json::Value;
 use surrealdb::{engine::remote::ws::Client, Surreal};
 
 pub struct Migrations<'a> {
@@ -27,6 +27,7 @@ impl<'a> Migrations<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 enum MigrationsError {
     #[error("key '{0}' is not an object in query result '{1}'")]
     QueryResultNotAnObject(String, String),
@@ -39,16 +40,17 @@ enum MigrationsError {
     #[error("{0}")]
     MigrationTableOrFileCorruption(String),
     #[error("{0}")]
-    MigrationFileNumbering(String),
-    #[error("Error running migration '{0}'")]
-    WrappedError(#[from] Box<dyn Error + Send + Sync>),
+    FileNumbering(String),
+    //#[error("Original query error: '{0}'\n Additional info: '{1}'")]
+    //QueryError(Box<dyn Error + Send + Sync>, String),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct Migration {
     file_name: String,
     number: u32,
-    date_ran: Option<DateTime<chrono::Utc>>,
+    date_ran: Option<surrealdb::sql::Datetime>,
 }
 
 #[derive(Debug)]
@@ -104,42 +106,39 @@ INFO FOR DB;
 
     let migrations = get_sql_files::<MigrationFiles>().await?;
 
-    let insert_existing_migrations_sql: String = migrations
+    let existing_migrations_to_insert: Vec<Migration> = migrations
         .into_iter()
         .map(|migration| Migration {
             file_name: migration.file_name,
             number: migration.number,
             date_ran: None,
         })
-        .map(|migration| {
-            Ok(format!(
-                "INSERT INTO migrations {};",
-                serde_json::to_string(&migration)?
-            ))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .join("\n");
+        .collect();
 
-    let sql = format!(
-        r#"
-BEGIN TRANSACTION;
+    let mut query = client
+        .query("BEGIN TRANSACTION;")
+        .query(&create_schema_sql)
+        .query(
+            r#"
+        DEFINE TABLE migrations SCHEMAFULL;
 
-DEFINE TABLE migrations SCHEMAFULL;
+        DEFINE FIELD fileName ON TABLE migrations TYPE string;
+        DEFINE FIELD number ON TABLE migrations TYPE int;
+        DEFINE FIELD dateRan ON TABLE migrations TYPE option<datetime>;
+        "#,
+        );
 
-DEFINE FIELD fileName ON TABLE migrations TYPE string;
-DEFINE FIELD number ON TABLE migrations TYPE int;
-DEFINE FIELD dateRan ON TABLE migrations TYPE datetime;
+    for (index, migration) in existing_migrations_to_insert.iter().enumerate() {
+        query = query
+            .query(format!("INSERT INTO migrations $migration{};", index))
+            .bind((format!("migration{}", index), migration));
+    }
 
-{}
-
-{}
-
-COMMIT TRANSACTION;
-    "#,
-        create_schema_sql, insert_existing_migrations_sql
-    );
-
-    let _ = client.query(sql).await?.check()?;
+    query
+        .query("COMMIT TRANSACTION;")
+        .await?
+        //.map_err(|e| MigrationsError::QueryError(Box::new(e), format!("Full query:\n{}", &sql)))?
+        .check()?;
 
     Ok(true)
 }
@@ -160,24 +159,6 @@ SELECT * FROM migrations;
     let db_migrations: Vec<Migration> = client.query(sql).await?.take(0)?;
 
     let mut file_migrations = get_sql_files::<MigrationFiles>().await?;
-
-    if let Some(first) = file_migrations.first() {
-        if first.number != 1 {
-            bail!(MigrationsError::MigrationFileNumbering(format!(
-                "First migration file number is not 1. File name: '{}'",
-                first.file_name
-            )));
-        }
-    }
-
-    for file_migration in file_migrations.iter().zip(file_migrations.iter().skip(1)) {
-        if file_migration.0.number + 1 == file_migration.1.number {
-            bail!(MigrationsError::MigrationFileNumbering(format!(
-                "Migration file numbers are not sequential. File names: '{}' and '{}'",
-                file_migration.0.file_name, file_migration.1.file_name
-            )));
-        }
-    }
 
     for db_migration in db_migrations.iter() {
         let (index, migration_file) = file_migrations
@@ -210,36 +191,27 @@ SELECT * FROM migrations;
         .collect::<Vec<_>>()
         .join("\n");
 
-    let update_migration_table = file_migrations
-        .into_iter()
-        .map(|migration| Migration {
-            file_name: migration.file_name,
-            number: migration.number,
-            date_ran: Some(Utc::now()),
-        })
-        .map(|migration| {
-            Ok(format!(
-                "INSERT INTO migrations {};",
-                serde_json::to_string(&migration)?
-            ))
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?
-        .join("\n");
+    let new_migration_table_entries = file_migrations.into_iter().map(|migration| Migration {
+        file_name: migration.file_name,
+        number: migration.number,
+        date_ran: Some(surrealdb::sql::Datetime::from(Utc::now())),
+    });
 
-    let sql = format!(
-        r#"
-BEGIN TRANSACTION;
+    let mut query = client
+        //.query("BEGIN TRANSACTION;")
+        .query(&run_new_migrations);
 
-{}
+    for (index, migration) in new_migration_table_entries.enumerate() {
+        query = query
+            .query(format!("INSERT INTO migrations $migration{};", index))
+            .bind((format!("migration{}", index), migration));
+    }
 
-{}
-
-COMMIT TRANSACTION;
-"#,
-        run_new_migrations, update_migration_table
-    );
-
-    let _ = client.query(sql).await?.check()?;
+    query
+        //.query("COMMIT TRANSACTION;")
+        .await?
+        //.map_err(|e| MigrationsError::QueryError(Box::new(e), format!("Full query:\n{}", &sql)))?
+        .check()?;
 
     Ok(())
 }
@@ -247,7 +219,7 @@ COMMIT TRANSACTION;
 async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile>> {
     let number_re = Regex::new(r"^\d+").unwrap();
 
-    let number_and_file_name: Vec<(u32, Cow<str>)> = F::iter()
+    let mut number_and_file_name: Vec<(u32, Cow<str>)> = F::iter()
         .map(|file_name| {
             let migration_file_name = file_name.to_string();
             let migration_number = (|| {
@@ -263,7 +235,30 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile
         })
         .collect::<Result<Vec<_>, MigrationsError>>()?;
 
-    let schemas: Vec<SqlFile> = number_and_file_name
+    number_and_file_name.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // validate
+    if let Some((number, name)) = number_and_file_name.first() {
+        if number.to_owned() != 1 {
+            bail!(MigrationsError::FileNumbering(format!(
+                "First file number is not 1. File name: '{}'",
+                name
+            )));
+        }
+    }
+    for (a, b) in number_and_file_name
+        .iter()
+        .zip(number_and_file_name.iter().skip(1))
+    {
+        if a.0 + 1 != b.0 {
+            bail!(MigrationsError::FileNumbering(format!(
+                "File numbers are not sequential or not one apart. File names: '{}' and '{}'",
+                a.1, b.1
+            )));
+        }
+    }
+
+    let sql_files: Vec<SqlFile> = number_and_file_name
         .into_iter()
         .map(|(number, file_name)| {
             Ok(SqlFile {
@@ -280,5 +275,5 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> anyhow::Result<Vec<SqlFile
         })
         .collect::<Result<Vec<_>, MigrationsError>>()?;
 
-    Ok(schemas)
+    Ok(sql_files)
 }
