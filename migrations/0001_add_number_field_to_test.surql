@@ -1,0 +1,1 @@
+DEFINE FIELD number ON TABLE test TYPE int;

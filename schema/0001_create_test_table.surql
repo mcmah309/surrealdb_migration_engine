@@ -1,0 +1,4 @@
+DEFINE TABLE test SCHEMAFULL;
+
+DEFINE FIELD string ON TABLE test TYPE string;
+DEFINE FIELD number ON TABLE test TYPE int;
