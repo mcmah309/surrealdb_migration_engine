@@ -8,20 +8,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use surrealdb::{engine::remote::ws::Client, Surreal};
 
-pub struct Migrations<'a> {
-    client: &'a Surreal<Client>,
-}
+pub struct SurrealdbMigrations;
 
-impl<'a> Migrations<'a> {
-    pub fn new(client: &'a Surreal<Client>) -> Self {
-        Self { client }
-    }
+impl SurrealdbMigrations {
 
-    pub async fn run(&self) -> anyhow::Result<()> {
-        if create_migration_table_and_schema_if_not_exists(self.client).await? {
+    pub async fn run(client: &Surreal<Client>) -> anyhow::Result<()> {
+        if create_migration_table_and_schema_if_not_exists(&client).await? {
             return Ok(()); // No migrations to run
         }
-        run_any_new_migrations(self.client).await?;
+        run_any_new_migrations(&client).await?;
         Ok(())
     }
 }
