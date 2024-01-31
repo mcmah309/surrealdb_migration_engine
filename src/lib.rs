@@ -139,11 +139,11 @@ INFO FOR DB;
 }
 
 #[derive(RustEmbed)]
-#[folder = "migrations"]
+#[folder = "$CARGO_MANIFEST_DIR/migrations"]
 struct MigrationFiles;
 
 #[derive(RustEmbed)]
-#[folder = "schema"]
+#[folder = "$CARGO_MANIFEST_DIR/schema"]
 struct SchemaFiles;
 
 async fn run_any_new_migrations(client: &Surreal<Client>) -> anyhow::Result<()> {
