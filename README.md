@@ -21,7 +21,7 @@ async fn main() {
 ## How It Works
 `surrealdb_migration_engine` works on two concepts `migrations` and `schema`. Migrations are queries (changes) to an apply to an existing schema. Schemas are queries that set up the db structure. Schemas and migrations reside in their own directory with each file being numbered in order e.g. `0001_add_age_to_user_table.surql`. Each of these directories is compiled with your binary with the help of the `rust_embed` crate. This means that the appropriate migrations or schema creation will happen at runtime. All migrations and schema changes are done in a single transaction, so if one fails, they all fail.
 
-`surrealdb_migration_engine` creates a `migrations` table inside your database to track which migrations have r n. The logic flow works like this. 
+`surrealdb_migration_engine` creates a `migrations` table inside your database to track which migrations have ran. The logic flow works like this. 
 - If the migrations table does not exist, run only the `schema` files and enter all current `migration` files into the migration table.
 - If the migrations table does exist, run any `migration` files that are not in the `migration` table
 
