@@ -1,4 +1,7 @@
-# surrealdb_migrations_engine
+# surrealdb_migration_engine
+
+[![crates.io](https://img.shields.io/crates/v/surrealdb_migration_engine.svg)](https://crates.io/crates/surrealdb_migration_engine)
+[![License: MIT](https://img.shields.io/badge/license-MIT-purple.svg)](https://opensource.org/licenses/MIT)
 
 Super simple yet power migration engine for surreal db. All you need to get it working is the following
 ```rust
