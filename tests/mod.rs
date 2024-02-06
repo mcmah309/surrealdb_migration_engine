@@ -3,11 +3,11 @@ use surrealdb_migration_engine::SurrealdbMigrationEngine;
 
 
 #[derive(rust_embed::RustEmbed)]
-#[folder = "migrations"]
+#[folder = "tests/migrations"]
 struct MigrationFiles;
 
 #[derive(rust_embed::RustEmbed)]
-#[folder = "schema"]
+#[folder = "tests/schema"]
 struct SchemaFiles;
 
 /// Start the server with the following command:
