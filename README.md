@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/surrealdb_migration_engine.svg)](https://crates.io/crates/surrealdb_migration_engine)
 [![License: MIT](https://img.shields.io/badge/license-MIT-purple.svg)](https://opensource.org/licenses/MIT)
 
-Simple yet power migration engine for [SurrealDB](https://github.com/surrealdb/surrealdb). All you need to get it working is the following:
+Simple yet powerful migration engine for [SurrealDB](https://github.com/surrealdb/surrealdb). All you need to get it working is the following:
 ```rust
 #[derive(rust_embed::RustEmbed)]
 #[folder = "migrations"]
@@ -28,7 +28,7 @@ async fn main() {
 - If the `migrations` table does not exist, run only the schema files, create a `migrations` table and add all of the current migration files to the table.
 - If the `migrations` table does exist, run any migration files that are not in the `migrations` table
 
-Very simple but extremely flexible!
+Simple yet very expressive!
 
 ## Uses
 - Include `surrealdb_migration_engine` in your application so whenever you run your application, the schema is always up to date.
