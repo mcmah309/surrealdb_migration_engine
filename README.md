@@ -26,7 +26,7 @@ async fn main() {
 
 `surrealdb_migration_engine` creates a `migrations` table inside your database to track which migrations have ran. The logic flow works like this: 
 - If the `migrations` table does not exist, run only the schema files, create a `migrations` table and add all of the current migration files to the table.
-- If the `migrations` table does exist, run any migration files that are not in the `migrations` table
+- If the `migrations` table does exist, run any migration files that are not in the `migrations` table and insert those migrations in the `migrations` table.
 
 Simple yet very expressive!
 

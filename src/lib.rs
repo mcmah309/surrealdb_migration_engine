@@ -9,6 +9,8 @@ use surrealdb::{engine::remote::ws::Client, Surreal};
 pub struct SurrealdbMigrationEngine;
 
 impl SurrealdbMigrationEngine {
+    /// If the `migrations` table does not exist, run only the schema files, create a `migrations` table and add all of the current migration files to the table.
+    /// If the `migrations` table does exist, run any migration files that are not in the `migrations` table and insert those migrations in the `migrations` table.
     pub async fn run<MigrationFiles, SchemaFiles>(
         client: &Surreal<Client>,
     ) -> Result<(), MigrationsError>
