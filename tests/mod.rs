@@ -1,5 +1,4 @@
 use surrealdb::{engine::remote::ws::{Client, Ws}, opt::auth::Root, Surreal};
-use surrealdb_migration_engine::SurrealdbMigrationEngine;
 
 
 #[derive(rust_embed::RustEmbed)]
@@ -29,5 +28,5 @@ async fn create_migration_table_if_not_exists() {
     .await.unwrap();
     client.use_ns("system").use_db("system").await.unwrap();
 
-    SurrealdbMigrationEngine::run::<MigrationFiles,SchemaFiles>(&client).await.unwrap();
+    surrealdb_migration_engine::run::<MigrationFiles,SchemaFiles>(&client).await.unwrap();
 }  

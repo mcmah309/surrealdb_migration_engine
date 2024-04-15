@@ -16,7 +16,7 @@ struct SchemaFiles;
 async fn main() {
     // create surealdb `client`
 
-    SurrealdbMigrationEngine::run::<MigrationFiles,SchemaFiles>(&client).await?;
+    surrealdb_migration_engine::run::<MigrationFiles,SchemaFiles>(&client).await?;
 
     // the rest of your code
 }

@@ -8,26 +8,24 @@ use serde_json::Value;
 use surrealdb::{engine::remote::ws::Client, Surreal};
 
 mod errors;
-pub struct SurrealdbMigrationEngine;
 
-impl SurrealdbMigrationEngine {
-    /// If the `migrations` table does not exist, run only the schema files, create a `migrations` table and add all of the current migration files to the table.
-    /// If the `migrations` table does exist, run any migration files that are not in the `migrations` table and insert those migrations in the `migrations` table.
-    pub async fn run<MigrationFiles, SchemaFiles>(
-        client: &Surreal<Client>,
-    ) -> Result<(), MigrationsError>
-    where
-        MigrationFiles: rust_embed::RustEmbed,
-        SchemaFiles: rust_embed::RustEmbed,
+/// If the `migrations` table does not exist, run only the schema files, create a `migrations` table and add all of the current migration files to the table.
+/// If the `migrations` table does exist, run any migration files that are not in the `migrations` table and insert those migrations in the `migrations` table.
+pub async fn run<MigrationFiles, SchemaFiles>(
+    client: &Surreal<Client>,
+) -> Result<(), MigrationsError>
+where
+    MigrationFiles: rust_embed::RustEmbed,
+    SchemaFiles: rust_embed::RustEmbed,
+{
+    if create_migration_table_and_schema_if_not_exists::<MigrationFiles, SchemaFiles>(&client)
+        .await?
+    // No migrations to run
     {
-        if create_migration_table_and_schema_if_not_exists::<MigrationFiles, SchemaFiles>(&client)
-            .await?
-        {
-            return Ok(()); // No migrations to run
-        }
-        run_any_new_migrations::<MigrationFiles, SchemaFiles>(&client).await?;
-        Ok(())
+        return Ok(());
     }
+    run_any_new_migrations::<MigrationFiles, SchemaFiles>(&client).await?;
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -58,10 +56,7 @@ where
 INFO FOR DB;
     "#;
 
-    let result: Vec<Value> = client
-        .query(get_migration_db)
-        .await?
-        .take(0)?;
+    let result: Vec<Value> = client.query(get_migration_db).await?.take(0)?;
 
     let Some(db_info) = result.get(0) else {
         return Err(MigrationsError::InfoForDbHasNoData);
@@ -69,7 +64,7 @@ INFO FOR DB;
 
     let tables = db_info
         .as_object()
-        .ok_or_else(|| { 
+        .ok_or_else(|| {
             #[cfg(feature = "tracing")]
             tracing::error!("`INFO FOR DB;` Did not return an object.");
             MigrationsError::InfoForDbNotAnObject
@@ -131,10 +126,7 @@ INFO FOR DB;
             .bind((format!("migration{}", index), migration));
     }
 
-    query
-        .query("COMMIT TRANSACTION;")
-        .await?
-        .check()?;
+    query.query("COMMIT TRANSACTION;").await?.check()?;
 
     Ok(true)
 }
@@ -150,10 +142,7 @@ where
 SELECT * FROM migrations;
     "#;
 
-    let db_migrations: Vec<Migration> = client
-        .query(sql)
-        .await?
-        .take(0)?;
+    let db_migrations: Vec<Migration> = client.query(sql).await?.take(0)?;
 
     let mut file_migrations = get_sql_files::<MigrationFiles>().await?;
 
@@ -171,8 +160,11 @@ SELECT * FROM migrations;
             })?;
         if db_migration.file_name != migration_file.file_name {
             #[cfg(feature = "tracing")]
-            tracing::error!("Migration file name  '{}' does not match the file name in the database '{}'",
-            migration_file.file_name, db_migration.file_name);
+            tracing::error!(
+                "Migration file name  '{}' does not match the file name in the database '{}'",
+                migration_file.file_name,
+                db_migration.file_name
+            );
             return Err(MigrationsError::MigrationFileDbMismatch);
         }
         file_migrations.remove(index);
@@ -204,10 +196,7 @@ SELECT * FROM migrations;
             .bind((format!("migration{}", index), migration));
     }
 
-    query
-        .query("COMMIT TRANSACTION;")
-        .await?
-        .check()?;
+    query.query("COMMIT TRANSACTION;").await?.check()?;
 
     Ok(())
 }
@@ -229,9 +218,12 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
             })()
             .ok_or_else(|| {
                 #[cfg(feature = "tracing")]
-                tracing::error!("File named '{0}' is malformed.",migration_file_name.clone());
-                MigrationsError::FileNameMalformed}
-            )?;
+                tracing::error!(
+                    "File named '{0}' is malformed.",
+                    migration_file_name.clone()
+                );
+                MigrationsError::FileNameMalformed
+            })?;
             Ok::<_, MigrationsError>((migration_number, file_name))
         })
         .collect::<Result<Vec<_>, MigrationsError>>()?;
@@ -242,8 +234,7 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
     if let Some((number, _name)) = number_and_file_name.first() {
         if number.to_owned() != 1 {
             #[cfg(feature = "tracing")]
-            tracing::error!("First file number is not 1. File name: '{}'",
-            _name);
+            tracing::error!("First file number is not 1. File name: '{}'", _name);
             return Err(MigrationsError::FileNumbering);
         }
     }
@@ -253,8 +244,11 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
     {
         if a.0 + 1 != b.0 {
             #[cfg(feature = "tracing")]
-            tracing::error!("File numbers are not sequential or not one apart. File names: '{}' and '{}'",
-            a.1, b.1);
+            tracing::error!(
+                "File numbers are not sequential or not one apart. File names: '{}' and '{}'",
+                a.1,
+                b.1
+            );
             return Err(MigrationsError::FileNumbering);
         }
     }
@@ -269,7 +263,7 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
                     F::get(file_name.as_ref())
                         .ok_or_else(|| {
                             #[cfg(feature = "tracing")]
-                            tracing::error!("Cannot load file '{}'.",file_name);
+                            tracing::error!("Cannot load file '{}'.", file_name);
                             MigrationsError::CannotLoadFile
                         })?
                         .data
