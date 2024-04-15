@@ -1,6 +1,6 @@
 [package]
 name = "surrealdb_migration_engine"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Migration engine for surrealdb"
 license = "MIT"
@@ -24,7 +24,7 @@ chrono = "^0.4.33"
 rust-embed = "^8.2.0"
 regex = "^1.10.3"
 error_set = "^0.3.1"
-tracing = { version = "0.1.40", optional = true }
+tracing = { version = "^0.1.40", optional = true }
 
 [dev-dependencies]
 tokio = "^1.35.1"

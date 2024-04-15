@@ -3,7 +3,7 @@
 [![crates.io](https://img.shields.io/crates/v/surrealdb_migration_engine.svg)](https://crates.io/crates/surrealdb_migration_engine)
 [![License: MIT](https://img.shields.io/badge/license-MIT-purple.svg)](https://opensource.org/licenses/MIT)
 
-Simple yet powerful migration engine for [SurrealDB](https://github.com/surrealdb/surrealdb). All you need to get it working is the following:
+A simple and powerful migration engine for [SurrealDB](https://github.com/surrealdb/surrealdb). All you need to get it working is the following:
 ```rust
 #[derive(rust_embed::RustEmbed)]
 #[folder = "migrations"]
