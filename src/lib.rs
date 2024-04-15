@@ -1,11 +1,13 @@
 use std::borrow::Cow;
 
 use chrono::Utc;
+use errors::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use surrealdb::{engine::remote::ws::Client, Surreal};
 
+mod errors;
 pub struct SurrealdbMigrationEngine;
 
 impl SurrealdbMigrationEngine {
@@ -26,29 +28,6 @@ impl SurrealdbMigrationEngine {
         run_any_new_migrations::<MigrationFiles, SchemaFiles>(&client).await?;
         Ok(())
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum MigrationsError {
-    #[error("key '{0}' is not an object in query result '{1}'")]
-    QueryResultNotAnObject(String, String),
-    #[error("key '{0}' not found in query result '{1}'")]
-    QueryResultKeyNotFound(String, String),
-    #[error("query result is empty for query '{0}")]
-    QueryResultEmpty(String),
-    #[error("File name '{0}' is malformed. Expected format e.g.: '0001_name.sursql'")]
-    FileNameMalformed(String),
-    #[error("Cannot load file '{0}'")]
-    CannotLoadFile(String),
-    #[error("{0}")]
-    MigrationTableOrFileCorruption(String),
-    #[error("{0}")]
-    FileNumbering(String),
-    #[error("Surrealdb error: '{0}'\n Additional info: '{1}'")]
-    Surrealdb(surrealdb::Error, String),
-    // #[error("Original query error: '{0}'\n Additional info: '{1}'")]
-    // WrappedError(Box<dyn Error + Send + Sync>, String),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -81,27 +60,31 @@ INFO FOR DB;
 
     let result: Vec<Value> = client
         .query(get_migration_db)
-        .await
-        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", get_migration_db)))?
-        .take(0)
-        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", get_migration_db)))?;
+        .await?
+        .take(0)?;
 
     let Some(db_info) = result.get(0) else {
-        return Err(MigrationsError::QueryResultEmpty(
-            get_migration_db.to_string(),
-        ));
+        return Err(MigrationsError::InfoForDbHasNoData);
     };
 
     let tables = db_info
         .as_object()
-        .ok_or_else(|| MigrationsError::QueryResultNotAnObject("".into(), db_info.to_string()))?
+        .ok_or_else(|| { 
+            #[cfg(feature = "tracing")]
+            tracing::error!("`INFO FOR DB;` Did not return an object.");
+            MigrationsError::InfoForDbNotAnObject
+        })?
         .get("tables")
         .ok_or_else(|| {
-            MigrationsError::QueryResultKeyNotFound("tables".into(), db_info.to_string())
+            #[cfg(feature = "tracing")]
+            tracing::error!("key 'tables' not found in query `INFO FOR DB;`.");
+            MigrationsError::InfoForDbDoesNotContainTables
         })?
         .as_object()
         .ok_or_else(|| {
-            MigrationsError::QueryResultNotAnObject("tables".into(), db_info.to_string())
+            #[cfg(feature = "tracing")]
+            tracing::error!("key 'tables' in `INFO FOR DB;` not an object.");
+            MigrationsError::InfoForDbNotAnObject
         })?;
 
     let has_migrations_table = tables.get("migrations").is_some();
@@ -150,10 +133,8 @@ INFO FOR DB;
 
     query
         .query("COMMIT TRANSACTION;")
-        .await
-        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?
-        .check()
-        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?;
+        .await?
+        .check()?;
 
     Ok(true)
 }
@@ -171,10 +152,8 @@ SELECT * FROM migrations;
 
     let db_migrations: Vec<Migration> = client
         .query(sql)
-        .await
-        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", sql)))?
-        .take(0)
-        .map_err(|e| MigrationsError::Surrealdb(e, format!("for query {}", sql)))?;
+        .await?
+        .take(0)?;
 
     let mut file_migrations = get_sql_files::<MigrationFiles>().await?;
 
@@ -184,17 +163,17 @@ SELECT * FROM migrations;
             .enumerate()
             .find(|(_index, migration_file)| migration_file.number == db_migration.number)
             .ok_or_else(|| {
-                MigrationsError::MigrationTableOrFileCorruption(format!(
-                    "Migration file not found for migration number '{}'. Original file name in db: '{}'",
-                    db_migration.number,
-                    db_migration.file_name
-                ))
+                #[cfg(feature = "tracing")]
+                tracing::error!("Migration file not found for migration number '{}'. Original file name in db: '{}'",
+                db_migration.number,
+                db_migration.file_name);
+                MigrationsError::MigrationFileInDbNotLongerExists
             })?;
         if db_migration.file_name != migration_file.file_name {
-            return Err(MigrationsError::MigrationTableOrFileCorruption(format!(
-                "Migration file name  '{}' does not match the file name in the database '{}'",
-                migration_file.file_name, db_migration.file_name
-            )));
+            #[cfg(feature = "tracing")]
+            tracing::error!("Migration file name  '{}' does not match the file name in the database '{}'",
+            migration_file.file_name, db_migration.file_name);
+            return Err(MigrationsError::MigrationFileDbMismatch);
         }
         file_migrations.remove(index);
     }
@@ -227,10 +206,8 @@ SELECT * FROM migrations;
 
     query
         .query("COMMIT TRANSACTION;")
-        .await
-        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?
-        .check()
-        .map_err(|e| MigrationsError::Surrealdb(e, "".into()))?;
+        .await?
+        .check()?;
 
     Ok(())
 }
@@ -240,6 +217,7 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
 
     let mut number_and_file_name: Vec<(u32, Cow<str>)> = F::iter()
         .map(|file_name| {
+            #[cfg(feature = "tracing")]
             let migration_file_name = file_name.to_string();
             let migration_number = (|| {
                 number_re
@@ -249,7 +227,11 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
                     .parse::<u32>()
                     .ok()
             })()
-            .ok_or_else(|| MigrationsError::FileNameMalformed(migration_file_name.clone()))?;
+            .ok_or_else(|| {
+                #[cfg(feature = "tracing")]
+                tracing::error!("File named '{0}' is malformed.",migration_file_name.clone());
+                MigrationsError::FileNameMalformed}
+            )?;
             Ok::<_, MigrationsError>((migration_number, file_name))
         })
         .collect::<Result<Vec<_>, MigrationsError>>()?;
@@ -257,12 +239,12 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
     number_and_file_name.sort_by(|a, b| a.0.cmp(&b.0));
 
     // validate
-    if let Some((number, name)) = number_and_file_name.first() {
+    if let Some((number, _name)) = number_and_file_name.first() {
         if number.to_owned() != 1 {
-            return Err(MigrationsError::FileNumbering(format!(
-                "First file number is not 1. File name: '{}'",
-                name
-            )));
+            #[cfg(feature = "tracing")]
+            tracing::error!("First file number is not 1. File name: '{}'",
+            _name);
+            return Err(MigrationsError::FileNumbering);
         }
     }
     for (a, b) in number_and_file_name
@@ -270,10 +252,10 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
         .zip(number_and_file_name.iter().skip(1))
     {
         if a.0 + 1 != b.0 {
-            return Err(MigrationsError::FileNumbering(format!(
-                "File numbers are not sequential or not one apart. File names: '{}' and '{}'",
-                a.1, b.1
-            )));
+            #[cfg(feature = "tracing")]
+            tracing::error!("File numbers are not sequential or not one apart. File names: '{}' and '{}'",
+            a.1, b.1);
+            return Err(MigrationsError::FileNumbering);
         }
     }
 
@@ -285,7 +267,11 @@ async fn get_sql_files<F: rust_embed::RustEmbed>() -> Result<Vec<SqlFile>, Migra
                 number: number,
                 sql: String::from_utf8_lossy(
                     F::get(file_name.as_ref())
-                        .ok_or_else(|| MigrationsError::CannotLoadFile(file_name.into_owned()))?
+                        .ok_or_else(|| {
+                            #[cfg(feature = "tracing")]
+                            tracing::error!("Cannot load file '{}'.",file_name);
+                            MigrationsError::CannotLoadFile
+                        })?
                         .data
                         .as_ref(),
                 )

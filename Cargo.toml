@@ -12,17 +12,21 @@ repository = "https://github.com/mcmah309/surrealdb_migration_engine"
 name = "surrealdb_migration_engine"
 path = "src/lib.rs"
 
+[features]
+default = []
+tracing = ["dep:tracing"]
 
 [dependencies]
-thiserror = "1.0.56"
-surrealdb = "1.1.1"
-serde = "1.0.195"
-serde_json = "1.0.111"
-chrono = "0.4.33"
+surrealdb = "^1.1.1"
+serde = "^1.0.195"
+serde_json = "^1.0.111"
+chrono = "^0.4.33"
 rust-embed = "^8.2.0"
-regex = "1.10.3"
+regex = "^1.10.3"
+error_set = "^0.3.1"
+tracing = { version = "0.1.40", optional = true }
 
 [dev-dependencies]
-tokio = "1.35.1"
-tracing = "0.1.40"
-tracing-subscriber = "0.3.18"
+tokio = "^1.35.1"
+tracing = "^0.1.40"
+tracing-subscriber = "^0.3.18"
