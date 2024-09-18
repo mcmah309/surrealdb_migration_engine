@@ -120,7 +120,7 @@ INFO FOR DB;
         "#,
         );
 
-    for (index, migration) in existing_migrations_to_insert.iter().enumerate() {
+    for (index, migration) in existing_migrations_to_insert.into_iter().enumerate() {
         query = query
             .query(format!("INSERT INTO migrations $migration{};", index))
             .bind((format!("migration{}", index), migration));
