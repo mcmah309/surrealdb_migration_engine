@@ -17,7 +17,7 @@ default = []
 tracing = ["dep:tracing"]
 
 [dependencies]
-surrealdb = "1"
+surrealdb = "2"
 serde = "1"
 serde_json = "1"
 chrono = "0.4"
